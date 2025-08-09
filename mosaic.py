@@ -1,0 +1,110 @@
+import os
+import cv2
+import numpy as np
+from glob import glob
+
+def average_lab(img_bgr: np.ndarray) -> np.ndarray:
+    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+    return lab.reshape(-1, 3).mean(axis=0)
+
+def load_tiles(tiles_dir: str, tile_size: int):
+    paths = []
+    for ext in ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"):
+        paths.extend(glob(os.path.join(tiles_dir, ext)))
+    if not paths:
+        raise FileNotFoundError("No tile images found in tiles_dir")
+
+    tiles_small = []
+    tiles_lab = []
+    for p in paths:
+        img = cv2.imread(p)
+        if img is None:
+            continue
+
+        # Кроп за да стане квадрат
+        h, w = img.shape[:2]
+        min_side = min(h, w)
+        y0 = (h - min_side) // 2
+        x0 = (w - min_side) // 2
+        img_cropped = img[y0:y0+min_side, x0:x0+min_side]
+
+        # Ресајз во стандардна големина на плочка
+        img_resized = cv2.resize(img_cropped, (tile_size, tile_size), interpolation=cv2.INTER_AREA)
+
+        tiles_small.append(img_resized)
+        tiles_lab.append(average_lab(img_resized))
+
+    if len(tiles_small) == 0:
+        raise RuntimeError("Failed to load any valid tile images.")
+
+    return np.array(tiles_small), np.array(tiles_lab, dtype=np.float32)
+
+
+def build_mosaic(target_path: str, tiles_dir: str, tile_size: int = 32, blend: float = 0.15, no_immediate_repeat: bool = True):
+    # 1) Вчитај целна слика
+    target = cv2.imread(target_path)
+    if target is None:
+        raise FileNotFoundError(f"Can't read target image: {target_path}")
+
+    h, w = target.shape[:2]
+    # За да се поклопи мрежата со tile_size
+    h_new = (h // tile_size) * tile_size
+    w_new = (w // tile_size) * tile_size
+    target = cv2.resize(target, (w_new, h_new), interpolation=cv2.INTER_AREA)
+
+    # 2) Вчитај плочки
+    tiles_small, tiles_lab = load_tiles(tiles_dir, tile_size)
+
+    # 3) Подготви празно платно
+    mosaic = np.zeros_like(target)
+
+    # 4) Пресметај LAB за целната (подобро усогласување на боја)
+    target_lab = cv2.cvtColor(target, cv2.COLOR_BGR2LAB)
+
+    # 5) Итерираме по блокови tile_size x tile_size
+    rows = h_new // tile_size
+    cols = w_new // tile_size
+    last_used_idx = -1
+
+    for r in range(rows):
+        for c in range(cols):
+            y0, y1 = r * tile_size, (r + 1) * tile_size
+            x0, x1 = c * tile_size, (c + 1) * tile_size
+
+            patch_lab = target_lab[y0:y1, x0:x1]
+            mean_lab = patch_lab.reshape(-1, 3).mean(axis=0)
+
+            # Euclid distance до секоја плочка во LAB
+            dists = np.linalg.norm(tiles_lab - mean_lab, axis=1)
+
+            if no_immediate_repeat and last_used_idx >= 0:
+                # мала казна за истиот индекс за да избегнеме исти соседни плочки
+                dists[last_used_idx] += 5.0
+
+            idx = int(np.argmin(dists))
+            tile_img = tiles_small[idx]
+
+            mosaic[y0:y1, x0:x1] = tile_img
+            last_used_idx = idx
+
+    # 6) По желба: лесно блендање со оригиналот за повеќе детали
+    if blend > 0:
+        mosaic = cv2.addWeighted(mosaic, 1 - blend, target, blend, 0)
+
+    return mosaic, target
+
+if __name__ == "__main__":
+    # === ПОДЕСИ ГИ ОВИЕ ПАТЕКИ ===
+    TARGET = "target.jpg"   # целната слика
+    TILES_DIR = "tiles"     # папка со плочки
+    TILE_SIZE = 32          # 16, 24, 32, 40... поголемо = поголеми плочки
+    BLEND = 0.12            # 0..0.3 добри вредности
+
+    out, original = build_mosaic(TARGET, TILES_DIR, TILE_SIZE, BLEND)
+
+    cv2.imshow("Original", original)
+    cv2.imshow("Mosaic", out)
+    cv2.imwrite("mosaic_output.jpg", out)
+    print("Saved mosaic_output.jpg")
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
