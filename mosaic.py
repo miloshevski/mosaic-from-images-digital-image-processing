@@ -41,14 +41,15 @@ def load_tiles(tiles_dir: str, tile_size: int):
 
     return np.array(tiles_small), np.array(tiles_lab, dtype=np.float32)
 
-def build_mosaic(target_path: str, tiles_dir: str, tile_size: int = 32, blend: float = 0.15, no_immediate_repeat: bool = True, max_width: int = 800):
+def build_mosaic(target_path: str, tiles_dir: str, tile_size: int = 16, blend: float = 0.15, no_immediate_repeat: bool = True, max_width: int = 800):
     """Гради мозаиќ од целната слика и плочките."""
-    # 1) Вчитај целна слика
-    target = cv2.imread(target_path)
-    if target is None:
+    # 1) Вчитај целна слика (оригинална)
+    target_original = cv2.imread(target_path)
+    if target_original is None:
         raise FileNotFoundError(f"Can't read target image: {target_path}")
 
     # Намали ја ако е поширока од max_width
+    target = target_original.copy()
     if target.shape[1] > max_width:
         scale = max_width / target.shape[1]
         new_size = (max_width, int(target.shape[0] * scale))
@@ -93,23 +94,22 @@ def build_mosaic(target_path: str, tiles_dir: str, tile_size: int = 32, blend: f
             mosaic[y0:y1, x0:x1] = tile_img
             last_used_idx = idx
 
-    # 6) Блендај со оригинал
     if blend > 0:
         mosaic = cv2.addWeighted(mosaic, 1 - blend, target, blend, 0)
 
-    return mosaic, target
+    return mosaic, target_original  # враќаме финалниот мозаиќ и вистинската оригинална слика
 
 if __name__ == "__main__":
     # Поставки
     TARGET = "target.jpg"   # Целната слика
     TILES_DIR = "tiles"     # Папка со плочки
-    TILE_SIZE = 16       # Големина на плочка
-    BLEND = 0.12             # Степен на блендање
+    TILE_SIZE = 16          # Помало = повеќе детали
+    BLEND = 0.12            # Степен на блендање
     MAX_WIDTH = 800         # Максимална ширина на target слика
 
-    out, original = build_mosaic(TARGET, TILES_DIR, TILE_SIZE, BLEND, max_width=MAX_WIDTH)
+    out, original_image = build_mosaic(TARGET, TILES_DIR, TILE_SIZE, BLEND, max_width=MAX_WIDTH)
 
-    cv2.imshow("Original", original)
+    cv2.imshow("Original Image", original_image)
     cv2.imshow("Mosaic", out)
     cv2.imwrite("mosaic_output.jpg", out)
     print("✅ Saved mosaic_output.jpg")
